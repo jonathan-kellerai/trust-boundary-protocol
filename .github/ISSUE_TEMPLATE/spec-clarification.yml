@@ -1,0 +1,31 @@
+name: Clarification request
+description: A specification element is ambiguous or under-specified.
+title: "[clarification] "
+labels: ["clarification", "spec"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when the spec is not wrong, but admits more than one reading
+        or leaves a decision unstated.
+  - type: textarea
+    id: element
+    attributes:
+      label: Which element is ambiguous?
+      description: Interface, type, method, or CONSTRAINT — with a file and section reference.
+    validations:
+      required: true
+  - type: textarea
+    id: ambiguity
+    attributes:
+      label: What is unclear?
+      description: Describe the competing readings, or the detail that is missing.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Why does it matter?
+      description: Optional — what decision or implementation the ambiguity blocks.
+    validations:
+      required: false

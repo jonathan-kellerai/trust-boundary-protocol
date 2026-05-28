@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use or reference this specification, please cite it as below."
+title: "LIMEN: Layered Invariant Mediating Epistemic Norms"
+type: dataset
+authors:
+  - family-names: Bowe
+    given-names: "Jonathan A."
+version: 0.1.0
+date-released: "2026-05-21"
+license: Apache-2.0
+repository-code: "https://github.com/jonathan-kellerai/trust-boundary-protocol"
+keywords:
+  - epistemic boundary layer
+  - confidence-gated action
+  - cross-domain mediation
+  - fail-closed
+  - specification
+abstract: >-
+  Trust Boundary Protocol is a specification for an epistemic boundary layer — a confidence-state
+  mediator that lets cooperating systems gate cross-domain actions on a shared
+  view of every participant's epistemic readiness. It defines five interfaces,
+  shared types, an exception hierarchy, and a set of testable correctness
+  constraints, and stops short of implementation.

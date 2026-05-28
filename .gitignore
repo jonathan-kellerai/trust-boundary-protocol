@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+
+# Tooling state
+.claude/
+.claude-tmp/
+
+# Staging-only audit + scratch
+STAGING-NOTES.md
+KICKOFF-PROMPT.md
+FRESH-SESSION-PROMPT.md
+NEXT-SESSION-PROMPT.md
+
+# Excluded from publication (atlases + ADR — see the IP-leak audit)
+atlases/
+docs/adr/
+
+# Editor cruft
+*.swp
+*.bak
+*.bak.md
+node_modules/
+.venv/
+.ruff_cache/

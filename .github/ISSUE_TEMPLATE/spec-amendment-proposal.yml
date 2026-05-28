@@ -1,0 +1,42 @@
+name: Amendment proposal
+description: Propose a new or changed specification element.
+title: "[amendment] "
+labels: ["amendment", "spec"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this to propose a new interface, type, method, CONSTRAINT, or a
+        resolution to one of the open questions in `specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md` §11.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What do you propose?
+      description: The new or changed element, stated precisely.
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why is this needed? Cite evidence — empirical, or a concrete gap in the current spec.
+    validations:
+      required: true
+  - type: dropdown
+    id: semver
+    attributes:
+      label: Semver impact
+      description: How would this change affect consumers of the specification?
+      options:
+        - "major — breaking change to an interface, type, or CONSTRAINT"
+        - "minor — additive, backward-compatible"
+        - "patch — clarification or editorial, no contract change"
+    validations:
+      required: true
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions touched
+      description: Optional — list any §11 open questions (OQ-N) this proposal resolves or affects.
+    validations:
+      required: false

@@ -1,0 +1,9 @@
+# Sensitive paths — changes require review by the repository owner.
+# Leaf documents are intentionally left open to contributors.
+
+/.github/        @jonathan-kellerai
+/LICENSE         @jonathan-kellerai
+/NOTICE          @jonathan-kellerai
+/AGENTS.md       @jonathan-kellerai
+/CLAUDE.md       @jonathan-kellerai
+/specs/          @jonathan-kellerai

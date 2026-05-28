@@ -1,0 +1,24 @@
+# markdownlint-cli2 configuration.
+#
+# The rules below are disabled because the specification and supporting
+# documents predate this lint gate and cannot be reflowed, and because the
+# issue and pull-request templates do not lead with a top-level heading.
+config:
+  MD013: false  # line length
+  MD022: false  # blanks around headings
+  MD025: false  # multiple top-level headings
+  MD029: false  # ordered-list item prefix
+  MD031: false  # blanks around fenced code
+  MD032: false  # blanks around lists
+  MD034: false  # bare URLs (intentional in attribution blocks)
+  MD036: false  # emphasis used instead of a heading
+  MD040: false  # fenced code without a language
+  MD041: false  # first line not a top-level heading
+  MD060: false  # table column style
+ignores:
+  - "node_modules/**"
+  - ".claude-tmp/**"
+  - "docs/adr/**"
+  - "atlases/**"
+  - "STAGING-NOTES.md"
+  - "KICKOFF-PROMPT.md"

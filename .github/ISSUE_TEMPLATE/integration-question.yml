@@ -1,0 +1,30 @@
+name: Integration question
+description: Ask how to adopt or wire in the Trust Boundary Protocol specification.
+title: "[integration] "
+labels: ["question", "integration"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for questions about applying Trust Boundary Protocol to a system. Trust Boundary Protocol is a
+        specification, not a library — there is no package to install.
+  - type: textarea
+    id: context
+    attributes:
+      label: Your context
+      description: What kind of system are you integrating, and which interfaces are you targeting?
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: reading
+    attributes:
+      label: What have you already read?
+      description: Optional — which spec sections or supporting docs you have consulted.
+    validations:
+      required: false

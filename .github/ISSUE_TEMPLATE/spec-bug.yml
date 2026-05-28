@@ -1,0 +1,33 @@
+name: Spec defect
+description: Report something that is wrong in the specification or contradicts the docs.
+title: "[bug] "
+labels: ["bug", "spec"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a concrete defect in `specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md`, or a
+        contradiction between the spec and the pattern report, workflow doc,
+        or README. For an ambiguity rather than an outright error, use the
+        clarification request instead.
+  - type: textarea
+    id: location
+    attributes:
+      label: Where is the defect?
+      description: File and section — e.g. `specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md` §8, CONSTRAINT 3.
+    validations:
+      required: true
+  - type: textarea
+    id: defect
+    attributes:
+      label: What is wrong?
+      description: Quote the offending text and explain the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should it say instead?
+      description: Optional — a proposed correction.
+    validations:
+      required: false

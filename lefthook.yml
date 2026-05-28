@@ -1,0 +1,9 @@
+# Lefthook git hooks. Install locally with: lefthook install
+# The pre-commit hook runs the same two gates CI runs (structure + sanitization).
+pre-commit:
+  parallel: true
+  commands:
+    structure:
+      run: bash scripts/check-structure.sh
+    sanitization:
+      run: bash scripts/check-sanitization.sh
