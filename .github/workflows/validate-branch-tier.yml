@@ -1,0 +1,78 @@
+name: Validate branch tier
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+# Enforces the 4-tier merge model:
+#   main  <- qa/**  only
+#   qa    <- dev/** only
+#   dev   <- external/** (contributors) or a CODEOWNER branch
+# external/* naming is validated separately by validate-branch-name.yml.
+jobs:
+  validate-branch-tier:
+    name: "Branch tier (${{ github.base_ref }} <- ${{ github.head_ref }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Check tier rule
+        run: |
+          python3 - <<'PYEOF'
+          import re, sys, os
+
+          base = os.environ["BASE_REF"]   # target branch (e.g. main)
+          head = os.environ["HEAD_REF"]   # source branch (e.g. qa/something)
+          actor = os.environ["ACTOR"]     # PR author GitHub login
+
+          # Read .github/CODEOWNERS to determine if the author is a maintainer.
+          codeowners = set()
+          try:
+              with open(".github/CODEOWNERS") as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line or line.startswith("#"):
+                          continue
+                      for token in line.split():
+                          if token.startswith("@"):
+                              codeowners.add(token.lstrip("@").lower())
+          except FileNotFoundError:
+              pass
+
+          is_maintainer = actor.lower() in codeowners
+
+          # Tier rules: maps target branch to (allowed-source-pattern, error-message).
+          RULES = {
+              "main": (r"^qa(/.*)?$",    "PRs into main must come from qa/**"),
+              "qa":   (r"^dev(/.*)?$",   "PRs into qa must come from dev/**"),
+              "dev":  (r"^external/",    "PRs into dev must come from external/** or a CODEOWNER branch"),
+          }
+
+          if base not in RULES:
+              # No tier rule for this target — allow (e.g. PRs between feature branches).
+              print(f"No tier rule for base '{base}'; skipping.")
+              sys.exit(0)
+
+          pattern, message = RULES[base]
+
+          if re.match(pattern, head):
+              print(f"Tier check passed: {head} -> {base}")
+              sys.exit(0)
+
+          if base == "dev" and is_maintainer:
+              print(f"Tier check passed: CODEOWNER '{actor}' may merge directly into dev.")
+              sys.exit(0)
+
+          print(f"::error::{message}")
+          print(f"::error::Attempted: {head} -> {base}")
+          sys.exit(1)
+          PYEOF
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
