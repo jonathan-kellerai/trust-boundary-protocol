@@ -89,7 +89,7 @@ jobs:
             --data conformance/ \
             --input opa-input.json \
             --format json \
-            'data.conformance.trust_dial.decision' \
+            'data.kellerai.oss.trust_dial.decision' \
             > opa-eval.stdout \
             2> opa-eval.stderr
           exit_code=$?

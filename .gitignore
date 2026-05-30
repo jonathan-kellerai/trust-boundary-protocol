@@ -11,9 +11,10 @@ KICKOFF-PROMPT.md
 FRESH-SESSION-PROMPT.md
 NEXT-SESSION-PROMPT.md
 
-# Excluded from publication (atlases + ADR — see the IP-leak audit)
+# Excluded from publication (atlases + ADR drafts — see the IP-leak audit)
 atlases/
-docs/adr/
+docs/adr/*
+!docs/adr/ADR-002-blast-radius-pulse.md
 
 # Editor cruft
 *.swp

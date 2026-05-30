@@ -1,0 +1,10 @@
+{
+  "_schema_version": "1.0.0",
+  "tier": "0",
+  "clean_merge_streak": 0,
+  "consecutive_clean_cycles": 0,
+  "regression_events": [],
+  "demotion_history": [],
+  "last_cycle_id": null,
+  "cycle_merge_count": 0
+}
