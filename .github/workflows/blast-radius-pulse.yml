@@ -1,0 +1,165 @@
+# Blast-radius pulse — evaluates a PR diff against conformance/blast_radius.rego
+# and posts a sticky-comment + uploads the per-run trace artifact.
+#
+# Read-only by design. The committed write-back of audit/blast-radius.jsonl is
+# performed by the sibling outcome workflow (blast-radius-outcome.yml) running
+# in the trusted workflow_run context. This split keeps the gate from needing
+# contents:write.
+#
+# Recursion-break guards (ADR-002 §5):
+#   1. paths-ignore: ['audit/**'] on pull_request — a trace commit alone does
+#      not retrigger the gate.
+#   2. The outcome workflow ends its write-back commit with [skip ci].
+#   3. The outcome workflow is keyed on workflow_run of THIS workflow; the
+#      identity guard at audit/** + github-actions[bot] keeps it from running
+#      on its own previous commit.
+name: Blast-radius pulse
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'audit/**'
+
+permissions:
+  contents: read         # checkout only
+  pull-requests: write   # sticky PR comment
+
+concurrency:
+  group: blast-radius-pulse-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pulse:
+    name: Blast-radius verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install OPA
+        uses: open-policy-agent/setup-opa@v2.4.0  # pin to SHA before release
+        with:
+          version: "1.14.1"
+
+      - name: Run pulse against PR diff
+        id: pulse
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/.pulse-out"
+          # Ensure the base ref is fetched (actions/checkout with fetch-depth:0
+          # gives us full history but origin/<base_ref> is not always a local
+          # tracking ref — refresh it).
+          git fetch --no-tags --prune origin "$BASE_REF"
+          git log --pretty=format:'%B%n' "origin/${BASE_REF}..HEAD" > "${GITHUB_WORKSPACE}/.pulse-out/pr-messages.txt"
+          bash scripts/pulse.sh \
+            --mode audit \
+            --diff-range "origin/${BASE_REF}...HEAD" \
+            --output-dir "${GITHUB_WORKSPACE}/.pulse-out" \
+            --commit-msg-file "${GITHUB_WORKSPACE}/.pulse-out/pr-messages.txt" \
+            --json > "${GITHUB_WORKSPACE}/.pulse-out/result.json" || pulse_exit=$?
+          pulse_exit="${pulse_exit:-0}"
+          echo "exit_code=${pulse_exit}" >> "$GITHUB_OUTPUT"
+          # Surface verdict + counts for downstream steps.
+          verdict="$(jq -r '.verdict' .pulse-out/verdict.json)"
+          errors="$(jq -r '.errors' .pulse-out/verdict.json)"
+          warnings="$(jq -r '.warnings' .pulse-out/verdict.json)"
+          {
+            echo "verdict=${verdict}"
+            echo "errors=${errors}"
+            echo "warnings=${warnings}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute policy digest
+        id: digest
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            d="$(sha256sum conformance/blast_radius.rego | awk '{print $1}')"
+          else
+            d="$(shasum -a 256 conformance/blast_radius.rego | awk '{print $1}')"
+          fi
+          echo "policy_digest=$d" >> "$GITHUB_OUTPUT"
+
+      - name: Emit trace fragment
+        env:
+          POLICY_DIGEST: ${{ steps.digest.outputs.policy_digest }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTOR: ${{ github.actor }}
+          VERDICT: ${{ steps.pulse.outputs.verdict }}
+          ERRORS: ${{ steps.pulse.outputs.errors }}
+          WARNINGS: ${{ steps.pulse.outputs.warnings }}
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          verdict_json="$(cat .pulse-out/verdict.json)"
+          jq -nc \
+            --arg ts "$ts" \
+            --arg trace_id "br-pulse-${GITHUB_RUN_ID}-${PR_NUMBER}" \
+            --arg event "pulse_verdict" \
+            --argjson pr "$PR_NUMBER" \
+            --arg actor "$PR_ACTOR" \
+            --argjson v "$verdict_json" \
+            --arg verdict "$VERDICT" \
+            --argjson errors "$ERRORS" \
+            --argjson warnings "$WARNINGS" \
+            --arg digest "$POLICY_DIGEST" \
+            --arg run_url "$run_url" \
+            '{
+              ts: $ts,
+              trace_id: $trace_id,
+              event: $event,
+              pr_number: $pr,
+              pr_actor: $actor,
+              git_sha: $v.git_sha,
+              mode: "audit",
+              changed_files: ($v.inputs.changed_files // []),
+              json_changes: ($v.inputs.json_changes // {}),
+              fired: ($v.fired // []),
+              verdict: $verdict,
+              errors: $errors,
+              warnings: $warnings,
+              rule_applied: $v.rule_applied,
+              alternatives: $v.alternatives,
+              rationale: $v.rationale,
+              opa_policy_digest: $digest,
+              run_url: $run_url
+            }' > .pulse-out/trace-fragment.jsonl
+
+      - name: Post PR comment
+        if: always() && github.event.pull_request.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -f .pulse-out/pr-comment.md ]; then
+            gh pr comment "$PR_NUMBER" --body-file .pulse-out/pr-comment.md || true
+          fi
+
+      - name: Upload pulse trace artifact
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: blast-radius-pulse-${{ github.run_id }}
+          path: |
+            .pulse-out/opa-input.json
+            .pulse-out/opa-eval.stdout
+            .pulse-out/opa-eval.stderr
+            .pulse-out/verdict.json
+            .pulse-out/pr-comment.md
+            .pulse-out/pulse-report.txt
+            .pulse-out/trace-fragment.jsonl
+          retention-days: 90
+
+      - name: Fail on blocked verdict
+        if: steps.pulse.outputs.verdict == 'blocked'
+        run: |
+          echo "::error::blast-radius pulse blocked the PR (errors=${{ steps.pulse.outputs.errors }})"
+          exit 1

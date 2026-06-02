@@ -31,7 +31,7 @@ its supporting documents.
 | Read this | When you need to know |
 |---|---|
 | [`specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md`](specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md) | The spec — interfaces, shared types, exception hierarchy, correctness invariants (§8), domain mapping (§9), open questions (§11) |
-| [`docs/pattern-report/trust-boundary-collector-synthesis.md`](docs/pattern-report/trust-boundary-collector-synthesis.md) | The empirical convergence evidence behind spec §2 |
+| [`docs/pattern-report/trust-boundary-protocol-collector-synthesis.md`](docs/pattern-report/trust-boundary-protocol-collector-synthesis.md) | The empirical convergence evidence behind spec §2 |
 | [`docs/TRUST-BOUNDARY-PROTOCOL-whitepaper.md`](docs/TRUST-BOUNDARY-PROTOCOL-whitepaper.md) | The white paper — TRUST-BOUNDARY-PROTOCOL in narrative form |
 | [`docs/TRUST-BOUNDARY-PROTOCOL-WORKFLOW.md`](docs/TRUST-BOUNDARY-PROTOCOL-WORKFLOW.md) | How this spec was produced — the authoring pipeline |
 | [`README.md`](README.md) | Human-facing overview and positioning |

@@ -42,6 +42,50 @@ convention changes:
 `README.md`, `CONTRIBUTING.md`, and the issue and pull-request templates
 restate conventions for convenience; they are downstream of `docs/agents/`.
 
+## Blast-radius pulse gates
+
+This repository ships a blast-radius pulse policy (`conformance/blast_radius.rego`) that
+evaluates `conformance/affects.json` against the git diff on every pull request. Two entries
+have `verifiable: true` and `severity: "error"`, meaning the CI gate hard-blocks until the
+required actions are footer-declared DONE:
+
+### BR-005 — CLAUDE.md invariants
+
+**Trigger:** any edit to `CLAUDE.md`.
+
+**Required actions (must be footer-declared in the commit):**
+
+1. Verify `CLAUDE.md` line count is `<= content_assertions.claude_md_max_lines` (currently 80).
+2. Verify `CLAUDE.md` first non-blank, non-comment line equals
+   `content_assertions.claude_md_first_content_line` (`@AGENTS.md`).
+3. If either invariant value is being changed, update `conformance/data.json` under
+   `content_assertions` and document the rationale here.
+
+**Current invariant values** (as of this entry, sourced from `conformance/affects.json:86-87`):
+
+- `claude_md_max_lines`: 80
+- `claude_md_first_content_line`: `@AGENTS.md`
+
+Both invariant rules live at `conformance/blast_radius.rego` and are asserted against
+`conformance/data.json`. Violations block CI.
+
+### BR-011 — affects manifest self-coverage
+
+**Trigger:** any edit to `conformance/affects.json`.
+
+**Required actions (must be footer-declared in the commit):**
+
+1. For each new or renamed manifest entry, add a positive test (entry fires on the correct
+   trigger path and `verdict == "blocked"` or `"owed"` as appropriate) **and** a cleared test
+   (all required actions footer-DONE, `verdict == "clear"`) in
+   `conformance/blast_radius_test.rego`.
+2. Document the new or changed manifest entry in this file (`docs/agents/enforcement.md`),
+   including: entry id, trigger glob, severity, verifiable flag, and a one-sentence rationale.
+
+**Rationale:** `conformance/affects.json` is the load-bearing cross-file relationship map. Every
+entry must be covered by a sibling test case so the blast-radius function's determinism proof
+is complete. An undocumented entry is unverifiable; an untested entry is unproven.
+
 ## Glossary review cadence
 
 Every change that resolves an open question or adds a CONSTRAINT to

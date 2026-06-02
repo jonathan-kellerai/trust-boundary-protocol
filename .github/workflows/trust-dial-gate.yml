@@ -1,0 +1,193 @@
+# Trust-dial gate — evaluates a Dependabot PR against conformance/trust_dial.rego
+# and acts on the verdict.
+#
+# Three verdicts:
+#   auto-merge      -> gh pr merge --auto --squash
+#   hold-for-review -> label + reviewer requested
+#   block           -> label + comment with rationale
+#
+# Read-only by design. The committed write-back of audit/trust-dial-state.json
+# and audit/decision-trace.jsonl is done by the outcome workflow, which runs in
+# the trusted workflow_run context. This split keeps the gate from needing
+# contents:write — and respects GitHub's hardened Dependabot rules (PRs opened
+# by dependabot[bot] run with a read-only GITHUB_TOKEN and no secrets access).
+name: Trust-dial gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read         # checkout only
+  pull-requests: write   # label + enable auto-merge
+
+jobs:
+  gate:
+    name: Trust-dial verdict
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2.4.0  # pin to SHA before release
+
+      - name: Install OPA
+        uses: open-policy-agent/setup-opa@v2.4.0  # pin to SHA before release
+        with:
+          version: "1.14.1"
+
+      - name: Build OPA input
+        id: build
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          DEPENDENCY: ${{ steps.meta.outputs.dependency-names }}
+          FROM_VERSION: ${{ steps.meta.outputs.previous-version }}
+          TO_VERSION: ${{ steps.meta.outputs.new-version }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          state="audit/trust-dial-state.json"
+          tier="$(jq -r '.tier' "$state")"
+          cycle_count="$(jq -r '.cycle_merge_count' "$state")"
+
+          jq -n \
+            --arg tier "$tier" \
+            --arg eco "$ECOSYSTEM" \
+            --arg ut "$UPDATE_TYPE" \
+            --arg dep "$DEPENDENCY" \
+            --arg fv "$FROM_VERSION" \
+            --arg tv "$TO_VERSION" \
+            --argjson cycle "$cycle_count" \
+            --argjson pr "$PR_NUMBER" \
+            --arg actor "$PR_ACTOR" \
+            '{
+              tier: $tier,
+              ecosystem: $eco,
+              update_type: $ut,
+              dependency: $dep,
+              from_version: $fv,
+              to_version: $tv,
+              cycle_merge_count: $cycle,
+              pr_number: $pr,
+              pr_actor: $actor
+            }' > opa-input.json
+
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          set +e
+          opa eval \
+            --data conformance/ \
+            --input opa-input.json \
+            --format json \
+            'data.kellerai.oss.trust_dial.decision' \
+            > opa-eval.stdout \
+            2> opa-eval.stderr
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 0 ]; then
+            echo "::error::opa eval failed (exit $exit_code)"
+            cat opa-eval.stderr
+            exit 1
+          fi
+          decision="$(jq -c '.result[0].expressions[0].value' opa-eval.stdout)"
+          verdict="$(printf '%s' "$decision" | jq -r '.verdict')"
+          rationale="$(printf '%s' "$decision" | jq -r '.rationale')"
+          printf '%s' "$decision" > decision.json
+          {
+            echo "verdict=$verdict"
+            echo "rationale=$rationale"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute policy digest
+        id: digest
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            d="$(sha256sum conformance/trust_dial.rego | awk '{print $1}')"
+          else
+            d="$(shasum -a 256 conformance/trust_dial.rego | awk '{print $1}')"
+          fi
+          echo "policy_digest=$d" >> "$GITHUB_OUTPUT"
+
+      - name: Emit trace entry
+        env:
+          POLICY_DIGEST: ${{ steps.digest.outputs.policy_digest }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          decision="$(cat decision.json)"
+          jq -nc \
+            --arg ts "$ts" \
+            --arg trace_id "td-gate-${GITHUB_RUN_ID}-${PR_NUMBER}" \
+            --arg event "gate_decision" \
+            --argjson pr "$PR_NUMBER" \
+            --arg actor "$PR_ACTOR" \
+            --argjson d "$decision" \
+            --arg digest "$POLICY_DIGEST" \
+            --arg run_url "$run_url" \
+            '{
+              ts: $ts,
+              trace_id: $trace_id,
+              event: $event,
+              pr_number: $pr,
+              pr_actor: $actor,
+              tier: $d.inputs.tier,
+              inputs: $d.inputs,
+              rule_applied: $d.rule_applied,
+              alternatives: $d.alternatives,
+              verdict: $d.verdict,
+              rationale: $d.rationale,
+              opa_policy_digest: $digest,
+              run_url: $run_url
+            }' > trace-fragment.jsonl
+
+      - name: Act on verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          RATIONALE: ${{ steps.verdict.outputs.rationale }}
+        run: |
+          set -euo pipefail
+          case "$VERDICT" in
+            auto-merge)
+              gh pr merge "$PR_NUMBER" --squash --auto
+              ;;
+            hold-for-review)
+              gh pr edit "$PR_NUMBER" --add-label "trust-dial/hold" || true
+              gh pr comment "$PR_NUMBER" --body "trust-dial: hold-for-review — $RATIONALE"
+              ;;
+            block)
+              gh pr edit "$PR_NUMBER" --add-label "trust-dial/blocked" || true
+              gh pr comment "$PR_NUMBER" --body "trust-dial: blocked — $RATIONALE"
+              ;;
+            *)
+              echo "::error::unknown verdict: $VERDICT"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload trust-dial trace artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: trust-dial-trace-${{ github.run_id }}
+          path: |
+            trace-fragment.jsonl
+            opa-input.json
+            opa-eval.stdout
+            opa-eval.stderr
+            decision.json
+          retention-days: 90

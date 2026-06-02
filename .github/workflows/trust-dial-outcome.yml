@@ -1,0 +1,274 @@
+# Trust-dial outcome — drives streak / circuit-breaker / promotion / demotion
+# from post-merge CI results.
+#
+# Triggered by `workflow_run` of the repo's CI workflow, completed. The
+# `if: workflow_run.event == 'push'` guard ensures only merged-commit CI runs
+# count — a CI run on the PR branch itself does not advance the dial.
+#
+# This is the only writer of audit/trust-dial-state.json and
+# audit/decision-trace.jsonl. The gate workflow reads; it never writes.
+#
+# Recursion-break guards (spec §1.3):
+#   1. Every push-triggered workflow has paths-ignore: ['audit/**'].
+#   2. The write-back commit message ends with [skip ci].
+#   3. The write-back is pushed with the default GITHUB_TOKEN; GitHub does not
+#      re-trigger workflows from GITHUB_TOKEN pushes (except workflow_run /
+#      repository_dispatch). This workflow is keyed on workflow_run of CI, not
+#      on its own push, so it does not satisfy its own trigger.
+name: Trust-dial outcome
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write        # commit state + trace
+  pull-requests: write   # auto-revert / comment
+
+concurrency:
+  group: trust-dial-state
+  cancel-in-progress: false
+
+jobs:
+  outcome:
+    name: Update trust-dial state
+    if: ${{ github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (default branch HEAD)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve merged Dependabot PR for this commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Find PRs whose merge commit matches the workflow_run head_sha.
+          pr_json="$(gh pr list --state merged --search "$HEAD_SHA" --json number,user,mergeCommit --limit 5 || echo '[]')"
+          pr_number="$(printf '%s' "$pr_json" | jq -r --arg sha "$HEAD_SHA" '.[] | select(.mergeCommit.oid == $sha) | .number' | head -n1)"
+          pr_actor="$(printf '%s' "$pr_json" | jq -r --arg sha "$HEAD_SHA" '.[] | select(.mergeCommit.oid == $sha) | .user.login' | head -n1)"
+          {
+            echo "pr_number=${pr_number:-}"
+            echo "pr_actor=${pr_actor:-}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update state file
+        id: state
+        env:
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_ACTOR: ${{ steps.pr.outputs.pr_actor }}
+        run: |
+          set -euo pipefail
+          state="audit/trust-dial-state.json"
+          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cycle_id="$(date -u +%G-W%V)"
+
+          # Only Dependabot merges drive the dial.
+          if [ "${PR_ACTOR:-}" != "dependabot[bot]" ]; then
+            echo "non-dependabot merge; no state change"
+            echo "tier_change=none" >> "$GITHUB_OUTPUT"
+            echo "tier_before=$(jq -r '.tier' "$state")" >> "$GITHUB_OUTPUT"
+            echo "tier_after=$(jq -r '.tier' "$state")" >> "$GITHUB_OUTPUT"
+            echo "streak_after=$(jq -r '.clean_merge_streak' "$state")" >> "$GITHUB_OUTPUT"
+            echo "post_merge_ci=$CI_CONCLUSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tier_before="$(jq -r '.tier' "$state")"
+
+          # Cycle rollover: a new cycle resets cycle_merge_count.
+          jq --arg cid "$cycle_id" '
+            if .last_cycle_id != $cid then
+              .last_cycle_id = $cid | .cycle_merge_count = 0
+            else . end
+          ' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+
+          if [ "$CI_CONCLUSION" = "success" ]; then
+            jq --arg cid "$cycle_id" '
+              .clean_merge_streak += 1
+              | .cycle_merge_count += 1
+            ' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+          else
+            # Regression — append event, reset streak, BakeTracker reset.
+            jq --arg ts "$ts" --arg cid "$cycle_id" --arg pr "${PR_NUMBER:-}" '
+              .clean_merge_streak = 0
+              | .consecutive_clean_cycles = 0
+              | .regression_events += [{ts: $ts, pr_number: ($pr | tonumber? // null), cycle_id: $cid}]
+            ' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+          fi
+
+          # Promotion: streak threshold + BakeTracker.
+          tier="$(jq -r '.tier' "$state")"
+          streak="$(jq -r '.clean_merge_streak' "$state")"
+          bake="$(jq -r '.consecutive_clean_cycles' "$state")"
+          next_tier=""
+          required=0
+          case "$tier" in
+            Observed)   next_tier="Assisted";   required=5 ;;
+            Assisted)   next_tier="Supervised"; required=10 ;;
+            Supervised) next_tier="Trusted";    required=20 ;;
+            Trusted)    next_tier="";           required=0 ;;
+          esac
+
+          tier_change="none"
+          if [ -n "$next_tier" ] && [ "$streak" -ge "$required" ] && [ "$bake" -ge 3 ]; then
+            jq --arg ts "$ts" --arg from "$tier" --arg to "$next_tier" --arg streak "$streak" '
+              .tier = $to
+              | .clean_merge_streak = 0
+              | .demotion_history += [{ts: $ts, from: $from, to: $to, direction: "promote",
+                                       reason: ("streak " + $streak + " met promotion threshold")}]
+            ' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+            tier_change="promote"
+          fi
+
+          # Demotion: 3 regressions within 4 cycles.
+          if [ "$CI_CONCLUSION" != "success" ] && [ "$tier_change" = "none" ]; then
+            recent="$(jq '[.regression_events[-12:] | .[] | .cycle_id] | unique | length' "$state")"
+            regression_count="$(jq '[.regression_events[] | select(.cycle_id != null)] | length' "$state")"
+            if [ "$regression_count" -ge 3 ]; then
+              prev_tier="$(jq -r '.tier' "$state")"
+              down_tier=""
+              case "$prev_tier" in
+                Trusted)    down_tier="Supervised" ;;
+                Supervised) down_tier="Assisted" ;;
+                Assisted)   down_tier="Observed" ;;
+                Observed)   down_tier="" ;;
+              esac
+              if [ -n "$down_tier" ]; then
+                jq --arg ts "$ts" --arg from "$prev_tier" --arg to "$down_tier" '
+                  .tier = $to
+                  | .clean_merge_streak = 0
+                  | .consecutive_clean_cycles = 0
+                  | .demotion_history += [{ts: $ts, from: $from, to: $to, direction: "demote",
+                                           reason: "circuit_breaker: regression_threshold reached"}]
+                ' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+                tier_change="demote"
+              fi
+            fi
+          fi
+
+          tier_after="$(jq -r '.tier' "$state")"
+          streak_after="$(jq -r '.clean_merge_streak' "$state")"
+          {
+            echo "tier_change=$tier_change"
+            echo "tier_before=$tier_before"
+            echo "tier_after=$tier_after"
+            echo "streak_after=$streak_after"
+            echo "post_merge_ci=$CI_CONCLUSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Auto-revert on regression
+        if: ${{ github.event.workflow_run.conclusion == 'failure' && steps.pr.outputs.pr_actor == 'dependabot[bot]' && steps.pr.outputs.pr_number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          revert_branch="trust-dial/auto-revert/${PR_NUMBER}"
+          git config user.name "trust-dial-bot"
+          git config user.email "trust-dial-bot@users.noreply.github.com"
+          git checkout -b "$revert_branch"
+          if git revert --no-edit "$HEAD_SHA"; then
+            git push origin "$revert_branch"
+            gh pr create \
+              --title "trust-dial: auto-revert #${PR_NUMBER}" \
+              --body "Post-merge CI failed on commit ${HEAD_SHA}. trust-dial circuit breaker opened an auto-revert PR." \
+              --label "trust-dial/auto-revert" \
+              --base "${GITHUB_REF_NAME:-main}" \
+              --head "$revert_branch"
+          else
+            gh issue create \
+              --title "trust-dial: auto-revert FAILED for #${PR_NUMBER}" \
+              --body "git revert --no-edit ${HEAD_SHA} could not apply cleanly. Manual intervention required." \
+              --label "trust-dial/auto-revert-failed"
+          fi
+          # Always reset the working tree so the state commit step is clean.
+          git checkout "${GITHUB_REF_NAME:-main}" -- audit/
+
+      - name: Append outcome trace entry
+        env:
+          POLICY_DIGEST: ""
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_ACTOR: ${{ steps.pr.outputs.pr_actor }}
+          POST_MERGE_CI: ${{ steps.state.outputs.post_merge_ci }}
+          STREAK_AFTER: ${{ steps.state.outputs.streak_after }}
+          TIER_BEFORE: ${{ steps.state.outputs.tier_before }}
+          TIER_AFTER: ${{ steps.state.outputs.tier_after }}
+          TIER_CHANGE: ${{ steps.state.outputs.tier_change }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest="$(sha256sum conformance/trust_dial.rego | awk '{print $1}')"
+          else
+            digest="$(shasum -a 256 conformance/trust_dial.rego | awk '{print $1}')"
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          jq -nc \
+            --arg ts "$ts" \
+            --arg trace_id "td-outcome-${GITHUB_RUN_ID}" \
+            --arg event "outcome" \
+            --arg pr "${PR_NUMBER:-}" \
+            --arg actor "${PR_ACTOR:-}" \
+            --arg ci "$POST_MERGE_CI" \
+            --arg streak "$STREAK_AFTER" \
+            --arg tb "$TIER_BEFORE" \
+            --arg ta "$TIER_AFTER" \
+            --arg tc "$TIER_CHANGE" \
+            --arg sha "$HEAD_SHA" \
+            --arg digest "$digest" \
+            --arg run_url "$run_url" \
+            '{
+              ts: $ts,
+              trace_id: $trace_id,
+              event: $event,
+              pr_number: ($pr | tonumber? // null),
+              pr_actor: $actor,
+              merge_sha: $sha,
+              post_merge_ci: $ci,
+              tier_before: $tb,
+              tier_after: $ta,
+              tier_change: $tc,
+              streak_after: ($streak | tonumber? // 0),
+              rule_applied: "outcome_update",
+              alternatives: ["promote", "demote", "none"],
+              rationale: ("ci=" + $ci + " tier_change=" + $tc),
+              opa_policy_digest: $digest,
+              run_url: $run_url
+            }' >> audit/decision-trace.jsonl
+
+      - name: Upload outcome trace artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: trust-dial-outcome-${{ github.run_id }}
+          path: |
+            audit/trust-dial-state.json
+            audit/decision-trace.jsonl
+          retention-days: 90
+
+      - name: Commit state write-back (skip-ci marker, audit/** only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- audit/; then
+            echo "no state changes to commit"
+            exit 0
+          fi
+          git config user.name "trust-dial-bot"
+          git config user.email "trust-dial-bot@users.noreply.github.com"
+          git add audit/trust-dial-state.json audit/decision-trace.jsonl
+          git commit -m "chore(trust-dial): cycle state update [skip ci]"
+          # Push with the default GITHUB_TOKEN — GitHub will not re-trigger
+          # push-keyed workflows from this push.
+          git push origin "HEAD:${GITHUB_REF_NAME:-main}"

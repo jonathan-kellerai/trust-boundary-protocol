@@ -1,0 +1,91 @@
+name: Validate linked issue
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+# Verifies the issue referenced in the branch name is Open and carries the
+# 'codeowner-approved' label. Only fires for external/ branches.
+# Linear integration: set the LINEAR_API_KEY repository secret to enable
+# Linear issue validation (see docs/branch-governance.md).
+jobs:
+  validate-linked-issue:
+    name: Linked issue open + codeowner-approved
+    if: startsWith(github.event.pull_request.head.ref, 'external/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Extract and verify linked issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+
+            // Extract issue key from: external/<type>-<KEY>-<rest>-p<N>
+            // KEY is Linear-style (ABC-123) or numeric GitHub issue (42).
+            const m = branch.match(/^external\/[^-]+-([A-Z]+-\d+|\d+)-/);
+            if (!m) {
+              core.setFailed(`Could not extract issue key from branch '${branch}'.`);
+              return;
+            }
+            const issueRef = m[1];
+
+            // Linear path: LINEAR_API_KEY is set but Linear API validation is not implemented.
+            // FAIL CLOSED — we refuse to silently pass an unvalidated Linear issue.
+            // To fix: either remove the LINEAR_API_KEY secret (falls back to GitHub Issues path)
+            // or extend this workflow to query the Linear GraphQL API and check issue state
+            // + required labels before allowing merge.
+            const linearKey = process.env.LINEAR_API_KEY;
+            if (linearKey && /^[A-Z]+-\d+$/.test(issueRef)) {
+              core.setFailed(
+                `Linear validation is unimplemented for issue ${issueRef}. ` +
+                `Either remove the LINEAR_API_KEY secret to fall back to GitHub Issues validation, ` +
+                `or extend this workflow to query the Linear API (check issue state == open and ` +
+                `required label/approval) before this check can pass.`
+              );
+              return;
+            }
+
+            // GitHub Issues path: use numeric part of the issue ref.
+            const numMatch = issueRef.match(/(\d+)$/);
+            if (!numMatch) {
+              core.setFailed(`Issue ref '${issueRef}' is not a GitHub issue number. Set the LINEAR_API_KEY secret for Linear validation.`);
+              return;
+            }
+            const issueNumber = parseInt(numMatch[1], 10);
+
+            let issue;
+            try {
+              const resp = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              });
+              issue = resp.data;
+            } catch (e) {
+              core.setFailed(`GitHub issue #${issueNumber} not found: ${e.message}`);
+              return;
+            }
+
+            if (issue.state !== 'open') {
+              core.setFailed(`Issue #${issueNumber} is ${issue.state}. PRs require an open issue.`);
+              return;
+            }
+
+            const labels = issue.labels.map(l => l.name);
+            if (!labels.includes('codeowner-approved')) {
+              core.setFailed(
+                `Issue #${issueNumber} is missing the 'codeowner-approved' label. ` +
+                `A CODEOWNER must approve the issue before a contributor PR can be opened.`
+              );
+              return;
+            }
+
+            core.info(`Issue #${issueNumber} is open and codeowner-approved. ✓`);
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

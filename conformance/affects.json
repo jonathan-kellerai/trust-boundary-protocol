@@ -1,0 +1,223 @@
+{
+  "blast_radius": {
+    "_schema_version": "1.0.0",
+    "_description": "Blast-radius pulse affects manifest. Each entry declares: when a file matching when_changed is in the git diff, the listed affects globs are in the blast radius, and required_actions are owed before the change is acceptable. The conformance.blast_radius Rego package consumes this file as `data.blast_radius.affects` (see docs/adr/ADR-002-blast-radius-pulse.md). Severity: error = block (CI fail / lefthook reject); warning = report only.",
+    "_conventions": {
+      "when_changed": "Glob, repo-relative, POSIX. Range syntax allowed (e.g. 'conformance/data.json#schema.artifact_types' marks a logical key inside a JSON file; the pulse engine treats anything after '#' as a json-pointer-style sub-target the diff scanner inspects).",
+      "affects": "Array of globs that must be checked / updated when when_changed fires.",
+      "required_actions": "Ordered, imperative, single-sentence strings. The author of the change must mark each as DONE in the commit message footer (Pulse-Action: <id> DONE) or the pre-commit hook rejects.",
+      "reason": "One-sentence rationale that ends up in the PR comment.",
+      "severity": "'error' blocks; 'warning' reports. The hard block also requires verifiable: true (see below).",
+      "verifiable": "Boolean. When true, the required_actions for this entry have a deterministic post-condition the pulse engine (or a CI step) can programmatically verify; the entry can BLOCK on owed actions. When false, the required_actions are advisory — owed actions downgrade to a warning even at error severity. See docs/agents/enforcement.md for the per-entry classification."
+    },
+    "affects": [
+      {
+        "id": "BR-001-conformance-rego",
+        "when_changed": "conformance/conformance.rego",
+        "affects": [
+          "conformance/data.json",
+          "docs/agents/enforcement.md"
+        ],
+        "reason": "Editing the policy invalidates the SHA-256 self-tamper digest pinned at conformance/data.json:95 and the policy must be documented in docs/agents/enforcement.md per AGENTS.md frozen-content discipline.",
+        "required_actions": [
+          "recompute SHA-256 of conformance/conformance.rego (sha256sum on Linux; shasum -a 256 on macOS)",
+          "update conformance/data.json policy_integrity.expected_digest with the new digest in the same commit",
+          "document the new or changed deny family in docs/agents/enforcement.md (rule name, severity, trigger condition)"
+        ],
+        "severity": "error",
+        "verifiable": true
+      },
+      {
+        "id": "BR-002-artifact-types-triplicate",
+        "when_changed": "conformance/data.json#schema.artifact_types",
+        "affects": [
+          "scripts/bootstrap.sh",
+          ".github/workflows/conformance.yml"
+        ],
+        "reason": "G-05 — the artifact-type set is the canonical example of a triplicated source of truth. The Rego policy reads it from data.json, but scripts/bootstrap.sh:115-118 hardcodes a parallel case statement and .github/workflows/conformance.yml documents it in the workflow_call inputs description. Adding or renaming an artifact type without updating all three sites silently breaks bootstrap or CI.",
+        "required_actions": [
+          "update the artifact-type case statement at scripts/bootstrap.sh:115-118 to include the new value",
+          "update the artifact-type default-dir+default-validator case at scripts/bootstrap.sh:157-162",
+          "update the artifact_type input description and any per-type matrix entries in .github/workflows/conformance.yml",
+          "update conformance/data.json schema.artifact_type_files map with default_dir + primary_validator for the new type"
+        ],
+        "severity": "error",
+        "verifiable": false
+      },
+      {
+        "id": "BR-003-required-files",
+        "when_changed": "conformance/data.json#schema.required_files",
+        "affects": [
+          "template/_files/**",
+          "scripts/bootstrap.sh",
+          "CHANGELOG.md"
+        ],
+        "reason": "Adding a required file is a MAJOR semver bump per AGENTS.md conventions and only takes effect if template/_files/ provides a templatized copy that bootstrap.sh can stamp. Without a template copy the bootstrap conformance self-check (scripts/bootstrap.sh:241-258) fails on every freshly stamped repo.",
+        "required_actions": [
+          "add template/_files/<new-file> with appropriate token coverage ({{REPO_NAME}}, {{OWNER}}, etc.)",
+          "verify scripts/bootstrap.sh token substitution covers any new tokens introduced in the template",
+          "add a CHANGELOG.md entry under a MAJOR version bump describing the new required file"
+        ],
+        "severity": "error",
+        "verifiable": false
+      },
+      {
+        "id": "BR-004-agents-md",
+        "when_changed": "AGENTS.md",
+        "affects": [
+          "conformance/conformance.rego",
+          "conformance/data.json"
+        ],
+        "reason": "AGENTS.md is the Tier-1 agent entry point and is length-capped at content_assertions.agents_md_max_lines (conformance/data.json:85, currently 150). Edits must respect the cap; if the cap needs to change, both the rule (conformance.rego:146-156) and the manifest value require coordinated update.",
+        "required_actions": [
+          "verify AGENTS.md line count is <= conformance/data.json:content_assertions.agents_md_max_lines",
+          "if raising the cap, update conformance/data.json:content_assertions.agents_md_max_lines and document the rationale in docs/agents/enforcement.md"
+        ],
+        "severity": "warning",
+        "verifiable": true
+      },
+      {
+        "id": "BR-005-claude-md",
+        "when_changed": "CLAUDE.md",
+        "affects": [
+          "conformance/conformance.rego",
+          "conformance/data.json"
+        ],
+        "reason": "CLAUDE.md must be <= content_assertions.claude_md_max_lines (currently 80) AND its first content line must equal content_assertions.claude_md_first_content_line ('@AGENTS.md'). Both rules live at conformance.rego:158-182 and assert against conformance/data.json:86-87. Edits that violate either invariant block CI.",
+        "required_actions": [
+          "verify CLAUDE.md line count is <= conformance/data.json:content_assertions.claude_md_max_lines",
+          "verify CLAUDE.md first non-blank, non-comment line equals conformance/data.json:content_assertions.claude_md_first_content_line",
+          "if changing either invariant, update conformance/data.json and document in docs/agents/enforcement.md"
+        ],
+        "severity": "error",
+        "verifiable": true
+      },
+      {
+        "id": "BR-006-new-rego-policy",
+        "when_changed": "conformance/*.rego",
+        "affects": [
+          "conformance/*_test.rego",
+          "docs/agents/enforcement.md",
+          "conformance/data.json"
+        ],
+        "reason": "Every Rego policy file in this repo has a sibling *_test.rego (see conformance/conformance_test.rego, conformance/trust_dial_test.rego). A new policy without a test is by definition undeterministic — its behavior is not proven. The enforcement doc and manifest may also need updates if the policy adds required-files assertions.",
+        "required_actions": [
+          "create a sibling <name>_test.rego with at least one positive and one negative case per rule",
+          "run `opa test conformance/` and confirm 100% of the new policy's rules are exercised",
+          "document the policy package, deny families, and intended scope in docs/agents/enforcement.md",
+          "if the policy declares new required-files or content-assertions, add them to conformance/data.json"
+        ],
+        "severity": "error",
+        "verifiable": false
+      },
+      {
+        "id": "BR-007-trust-dial-manifest",
+        "when_changed": "conformance/trust_dial.rego",
+        "affects": [
+          "conformance/trust_dial_data.json",
+          "conformance/trust_dial_test.rego",
+          "template/_files/conformance/trust_dial.rego",
+          "template/_files/conformance/trust_dial_data.json",
+          "template/_files/conformance/trust_dial_test.rego",
+          "audit/trust-dial-state.json"
+        ],
+        "reason": "The trust-dial verdict policy is a pure function over (state file x verdict matrix x Dependabot inputs). Changing the policy without updating the matrix data, the test suite, the templatized mirrors, or the state-file schema introduces a silent skew between bootstrapped repos and the reference repo. ADR-001 mandates these be edited as a single unit.",
+        "required_actions": [
+          "update conformance/trust_dial_data.json if the change introduces new matrix cells or budget keys",
+          "update conformance/trust_dial_test.rego with cases covering the new behavior",
+          "mirror the change in template/_files/conformance/trust_dial.rego (and the data + test siblings)",
+          "if the state-file schema changes, update audit/trust-dial-state.json and document the migration in docs/agents/enforcement.md"
+        ],
+        "severity": "error",
+        "verifiable": false
+      },
+      {
+        "id": "BR-008-templatized-required-file",
+        "when_changed": "template/_files/**",
+        "affects": [
+          "conformance/data.json"
+        ],
+        "reason": "Files under template/_files/ are the canonical templatized copies stamped into bootstrapped repos. If the templatized path corresponds to a required-file entry in conformance/data.json:schema.required_files, the templatized content must satisfy whatever content_assertions apply (e.g. CLAUDE.md must start with @AGENTS.md after token substitution).",
+        "required_actions": [
+          "if the templatized path is a required file, dry-run bash scripts/bootstrap.sh --out /tmp/pulse-check and confirm the conformance self-check at bootstrap.sh:241-258 still passes",
+          "verify any tokens introduced in the template are covered by the substitution list at scripts/bootstrap.sh:182-194"
+        ],
+        "severity": "warning",
+        "verifiable": false
+      },
+      {
+        "id": "BR-009-conformance-workflow",
+        "when_changed": ".github/workflows/conformance.yml",
+        "affects": [
+          "docs/agents/enforcement.md"
+        ],
+        "reason": "conformance.yml is the reusable workflow consumer repos invoke at a pinned SHA. Changing its interface (inputs, outputs, steps) is a contract change consumers cannot detect at call time. docs/agents/enforcement.md owns the versioning + pinned-SHA story and must be updated whenever the contract moves.",
+        "required_actions": [
+          "document the workflow change in docs/agents/enforcement.md, including the new pinned SHA and the consumer migration path",
+          "if the change is breaking (input rename, removed step), bump the MAJOR version in CHANGELOG.md and tag a release"
+        ],
+        "severity": "warning",
+        "verifiable": false
+      },
+      {
+        "id": "BR-010-scripts-coverage",
+        "when_changed": "scripts/**",
+        "affects": [
+          "docs/agents/enforcement.md",
+          "scripts/**"
+        ],
+        "reason": "Any change to a script under scripts/ may shift the operational contract the repository documents in docs/agents/enforcement.md (preflight commands, validator invocations, conformance scan shape). This entry guarantees every scripts/** path is reachable from at least one manifest entry and surfaces an advisory whenever a script changes.",
+        "required_actions": [
+          "review docs/agents/enforcement.md for documentation that references the changed script's invocation",
+          "verify shellcheck -x reports no new findings against the changed script"
+        ],
+        "severity": "warning",
+        "verifiable": true
+      },
+      {
+        "id": "BR-011-affects-manifest",
+        "when_changed": "conformance/affects.json",
+        "affects": [
+          "conformance/affects.json",
+          "conformance/blast_radius.rego",
+          "conformance/blast_radius_test.rego",
+          "conformance/README.md",
+          "docs/agents/enforcement.md"
+        ],
+        "reason": "The affects manifest itself is a load-bearing artifact. Editing it changes which cross-file relationships the pulse enforces; every entry must be covered by a sibling test case in blast_radius_test.rego, and any policy change must be documented.",
+        "required_actions": [
+          "if adding or renaming a manifest entry, add a positive and a cleared test case in conformance/blast_radius_test.rego",
+          "document the new or changed manifest entry in docs/agents/enforcement.md"
+        ],
+        "severity": "error",
+        "verifiable": true
+      },
+      {
+        "id": "BR-012-docs-agents-coverage",
+        "when_changed": "docs/agents/**",
+        "affects": [
+          "docs/agents/**"
+        ],
+        "reason": "docs/agents/** is the Tier-2 agent reference set. This entry guarantees every file there is reachable from the manifest (the affects_manifest_complete deny family requires it) and surfaces an advisory whenever Tier-2 prose changes.",
+        "required_actions": [
+          "verify the change is consistent with the conventions documented in docs/agents/conventions.md"
+        ],
+        "severity": "warning",
+        "verifiable": false
+      },
+      {
+        "id": "BR-013-template-coverage",
+        "when_changed": "template/**",
+        "affects": [
+          "template/**"
+        ],
+        "reason": "template/** is the canonical scaffold that scripts/bootstrap.sh stamps into freshly bootstrapped repos. This entry guarantees every file there is reachable from the manifest (the affects_manifest_complete deny family requires it).",
+        "required_actions": [
+          "if the file is templatized into a required-file path, dry-run bash scripts/bootstrap.sh and confirm the self-check still passes (see BR-008)"
+        ],
+        "severity": "warning",
+        "verifiable": false
+      }
+    ]
+  }
+}

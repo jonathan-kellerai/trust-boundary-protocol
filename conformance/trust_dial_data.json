@@ -1,0 +1,52 @@
+{
+  "trust_dial": {
+    "tiers": ["Observed", "Assisted", "Supervised", "Trusted"],
+    "default_tier": "Observed",
+    "verdict_matrix": {
+      "Observed": {
+        "default": {
+          "version-update:semver-patch": "hold-for-review",
+          "version-update:semver-minor": "hold-for-review",
+          "version-update:semver-major": "hold-for-review"
+        }
+      },
+      "Assisted": {
+        "default": {
+          "version-update:semver-patch": "auto-merge",
+          "version-update:semver-minor": "hold-for-review",
+          "version-update:semver-major": "block"
+        }
+      },
+      "Supervised": {
+        "default": {
+          "version-update:semver-patch": "auto-merge",
+          "version-update:semver-minor": "auto-merge",
+          "version-update:semver-major": "hold-for-review"
+        }
+      },
+      "Trusted": {
+        "default": {
+          "version-update:semver-patch": "auto-merge",
+          "version-update:semver-minor": "auto-merge",
+          "version-update:semver-major": "hold-for-review"
+        }
+      }
+    },
+    "promotion": {
+      "Observed->Assisted":   { "clean_streak_required": 5 },
+      "Assisted->Supervised": { "clean_streak_required": 10 },
+      "Supervised->Trusted":  { "clean_streak_required": 20 }
+    },
+    "budget": {
+      "max_auto_merges_per_cycle": 5,
+      "cycle": "weekly"
+    },
+    "circuit_breaker": {
+      "regression_threshold": 3,
+      "window_cycles": 4
+    },
+    "bake": {
+      "consecutive_clean_cycles_required": 3
+    }
+  }
+}
