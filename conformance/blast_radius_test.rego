@@ -447,3 +447,31 @@ test_mixed_verifiable_and_unverifiable_errors if {
 	result.errors == 1
 	result.warnings == 1
 }
+
+# ---------------------------------------------------------------------------
+# BR-011 — editing conformance/affects.json fires the affects-manifest rule
+# (verifiable=true error). Actions: add test cases + document in enforcement.md.
+# ---------------------------------------------------------------------------
+
+# Positive: editing conformance/affects.json fires BR-011 and blocks.
+test_br011_fires_on_affects_manifest_edit if {
+	result := blast_radius.result with input as _input(
+		["conformance/affects.json"], {}, [],
+	)
+	"BR-011-affects-manifest" in _fired_ids(result)
+	result.verdict == "blocked"
+	result.errors == 1
+}
+
+# Cleared: both BR-011 required actions declared DONE → verdict clear.
+test_br011_clears_when_all_actions_done if {
+	result := blast_radius.result with input as _input(
+		["conformance/affects.json"], {},
+		[
+			"BR-011-affects-manifest-1",
+			"BR-011-affects-manifest-2",
+		],
+	)
+	result.verdict == "clear"
+	result.errors == 0
+}
