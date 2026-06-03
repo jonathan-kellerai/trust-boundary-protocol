@@ -1,0 +1,6 @@
+{
+  "artifact_type": "markdown-spec",
+  "artifact_dir": "specs",
+  "primary_validator": "markdownlint-cli2",
+  "owner": "jonathan-kellerai"
+}

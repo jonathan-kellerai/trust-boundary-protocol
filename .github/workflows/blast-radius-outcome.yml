@@ -1,0 +1,87 @@
+# Blast-radius outcome — appends the committed trace line to
+# audit/blast-radius.jsonl after every successful gate run.
+#
+# Triggered by `workflow_run` of "Blast-radius pulse" (the gate). The
+# write-back uses contents:write and commits with a [skip ci] marker; the
+# gate workflow itself never has contents:write (least-privilege gate).
+#
+# Recursion-break guards (ADR-002 §5):
+#   1. The gate workflow declares paths-ignore: ['audit/**'].
+#   2. Every commit this workflow writes ends with [skip ci].
+#   3. Author-identity guard at the head of the job exits early if the
+#      triggering commit is itself a github-actions[bot] audit/** commit.
+name: Blast-radius outcome
+
+on:
+  workflow_run:
+    workflows: ["Blast-radius pulse"]
+    types: [completed]
+
+permissions:
+  contents: write        # commit trace line
+  pull-requests: read    # resolve PR metadata
+
+concurrency:
+  group: blast-radius-trace
+  cancel-in-progress: false
+
+jobs:
+  outcome:
+    name: Append blast-radius trace
+    # Run only on pull_request-triggered gate completions AND only when the
+    # gate-triggering actor is not github-actions[bot]. The latter is the
+    # author-identity recursion guard (3 of 3 per ADR-002 §5): if the gate
+    # run was authored by the bot, the trace write-back is suppressed.
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request'
+          && github.event.workflow_run.actor.login != 'github-actions[bot]'
+          && github.event.workflow_run.actor.login != 'blast-radius-bot' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (default branch HEAD)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download gate trace artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: blast-radius-pulse-${{ github.event.workflow_run.id }}
+          path: .pulse-in
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Append trace line to audit/blast-radius.jsonl
+        run: |
+          set -euo pipefail
+          if [ ! -f .pulse-in/trace-fragment.jsonl ]; then
+            echo "no trace fragment in artifact — nothing to append"
+            exit 0
+          fi
+          mkdir -p audit
+          # Ensure newline termination on the existing trace before append.
+          if [ -s audit/blast-radius.jsonl ] && \
+             [ "$(tail -c1 audit/blast-radius.jsonl | od -An -c | tr -d ' ')" != "\\n" ]; then
+            printf '\n' >> audit/blast-radius.jsonl
+          fi
+          cat .pulse-in/trace-fragment.jsonl >> audit/blast-radius.jsonl
+
+      - name: Commit write-back (skip-ci marker, audit/** only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- audit/blast-radius.jsonl; then
+            echo "no trace changes to commit"
+            exit 0
+          fi
+          git config user.name "blast-radius-bot"
+          git config user.email "blast-radius-bot@users.noreply.github.com"
+          git add audit/blast-radius.jsonl
+          git commit -m "chore(blast-radius): append pulse trace [skip ci]"
+          # GITHUB_TOKEN push: GitHub does not re-trigger push-keyed workflows
+          # from this push, and the gate workflow's paths-ignore guards
+          # pull_request retriggering.
+          git push origin "HEAD:${GITHUB_REF_NAME:-main}"

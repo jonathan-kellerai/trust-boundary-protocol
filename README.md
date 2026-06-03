@@ -46,7 +46,7 @@ None of them shared infrastructure.
 Each maintained its own version, with its own bugs, its own audit gaps, and no cross-system visibility.
 
 TRUST-BOUNDARY-PROTOCOL is the unification of that convergence: one epistemically-aware boundary layer that the nine systems — and systems like them — can share instead of re-deriving.
-The empirical evidence behind this claim is in [`docs/pattern-report/trust-boundary-collector-synthesis.md`](docs/pattern-report/trust-boundary-collector-synthesis.md).
+The empirical evidence behind this claim is in [`docs/pattern-report/trust-boundary-protocol-collector-synthesis.md`](docs/pattern-report/trust-boundary-protocol-collector-synthesis.md).
 
 ## 3. Scope
 
@@ -139,7 +139,7 @@ Full text in [`LICENSE`](LICENSE); the attribution and copyright notice is in [`
 | Path | What it is |
 |---|---|
 | [`specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md`](specs/TRUST-BOUNDARY-PROTOCOL-SPEC.md) | The specification — interfaces, shared types, exception hierarchy, correctness invariants, domain mapping, open questions |
-| [`docs/pattern-report/trust-boundary-collector-synthesis.md`](docs/pattern-report/trust-boundary-collector-synthesis.md) | The empirical convergence evidence — how nine systems independently arrived at the same pattern |
+| [`docs/pattern-report/trust-boundary-protocol-collector-synthesis.md`](docs/pattern-report/trust-boundary-protocol-collector-synthesis.md) | The empirical convergence evidence — how nine systems independently arrived at the same pattern |
 | [`docs/TRUST-BOUNDARY-PROTOCOL-whitepaper.md`](docs/TRUST-BOUNDARY-PROTOCOL-whitepaper.md) | The white paper — TRUST-BOUNDARY-PROTOCOL explained in narrative form |
 | [`docs/TRUST-BOUNDARY-PROTOCOL-WORKFLOW.md`](docs/TRUST-BOUNDARY-PROTOCOL-WORKFLOW.md) | The spec-authoring pipeline — how this specification was produced |
 

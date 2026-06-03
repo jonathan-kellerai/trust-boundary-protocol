@@ -1,0 +1,50 @@
+name: Validate external branch name
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+# Only fires for external/* branches — maintainer branches are unrestricted.
+jobs:
+  validate-branch-name:
+    name: Branch name pattern (external/)
+    if: startsWith(github.event.pull_request.head.ref, 'external/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate branch name pattern
+        run: |
+          python3 - <<'PYEOF'
+          import re, sys, os
+
+          TYPES = (
+              "feat|fix|chore|docs|refactor|test|ci|build|perf"
+              "|revert|style|hotfix|spike|wip|release|rnd"
+          )
+          # Pattern: external/<type>-<ISSUE-KEY>-<scope+gerund segments>-p<N>
+          # ISSUE-KEY: uppercase team prefix + hyphen + digits  (e.g. ABC-123)
+          # scope+gerund: one or more lowercase alphanumeric segments
+          # priority: p0 (critical) through p4 (backlog)
+          PATTERN = re.compile(
+              rf"^external/(?:{TYPES})"
+              r"-[A-Z]+-\d+"
+              r"(?:-[a-z][a-z0-9]*)+"
+              r"-p[0-4]$"
+          )
+
+          branch = os.environ["BRANCH"]
+          if not PATTERN.match(branch):
+              print(f"::error::Branch '{branch}' does not match the required pattern.")
+              print("::error::Required: external/<type>-<ISSUE-KEY>-<scope>-<gerund>-p<N>")
+              print("::error::Example:  external/feat-ABC-123-auth-adding-oauth-p1")
+              print("::error::Types:    feat fix chore docs refactor test ci build perf revert style hotfix spike wip release rnd")
+              print("::error::Priority: p0=critical p1=high p2=medium p3=low p4=backlog")
+              sys.exit(1)
+
+          print(f"Branch name is valid: {branch}")
+          PYEOF
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}

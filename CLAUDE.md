@@ -1,5 +1,3 @@
-# CLAUDE.md — Claude Code instructions for trust-boundary-protocol
-
 @AGENTS.md
 
 ## Claude-specific notes
