@@ -285,7 +285,7 @@ _render_report() {
 _render_pr_comment() {
 	local sink="$1"
 	{
-		printf '## Blast-radius pulse — %s\n\n' "$verdict"
+		printf '## Blast-radius pulse -- %s\n\n' "$verdict"
 		printf '- errors: %d\n- warnings: %d\n- mode: %s\n\n' "$errors" "$warnings" "$mode"
 		if [ "$verdict" != "clear" ]; then
 			printf '### Fired entries\n\n'
